@@ -1,18 +1,13 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const { Pool } = require('pg');
+const { pool } = require('./database/db');
+const ProfileHandler = require('./handlers/profileHandler');
 
 // Инициализация бота
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-// Инициализация подключения к базе данных
-const pool = new Pool({
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME
-});
+// Инициализация обработчиков
+const profileHandler = new ProfileHandler(bot);
 
 // Проверка подключения к базе данных и структуры таблицы
 async function checkDatabaseConnection() {
@@ -37,6 +32,7 @@ async function checkDatabaseConnection() {
                     fio VARCHAR(255) NOT NULL,
                     age INTEGER NOT NULL,
                     location VARCHAR(255) NOT NULL,
+                    photo_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             `);
@@ -86,6 +82,43 @@ async function deletePreviousMessage(chatId) {
     }
 }
 
+// Обработчик команды /profile
+bot.onText(/\/profile/, async (msg) => {
+    const chatId = msg.chat.id;
+
+    try {
+        // Проверяем, зарегистрирован ли пользователь
+        const result = await pool.query('SELECT * FROM newtable WHERE chat_id = $1', [chatId]);
+        
+        if (result.rows.length === 0) {
+            await bot.sendMessage(chatId, 'Для доступа к профилю необходимо зарегистрироваться.', {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: 'Регистрация', callback_data: 'register' }]
+                    ]
+                }
+            });
+            return;
+        }
+
+        // Показываем меню профиля
+        await bot.sendMessage(chatId, 'Выберите действие:', {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: 'Мой профиль', callback_data: 'my_profile' }],
+                    [{ text: 'Редактировать профиль', callback_data: 'edit_profile' }],
+                    [{ text: 'Мои награды', callback_data: 'my_awards' }],
+                    [{ text: 'Мои утилизации', callback_data: 'my_utilizations' }],
+                    [{ text: 'Моя статистика', callback_data: 'my_statistics' }]
+                ]
+            }
+        });
+    } catch (error) {
+        console.error('Ошибка при проверке профиля:', error);
+        await bot.sendMessage(chatId, 'Произошла ошибка при получении данных профиля.');
+    }
+});
+
 // Обработчик команды /start
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
@@ -121,24 +154,29 @@ bot.onText(/\/start/, async (msg) => {
     }
 });
 
-// Обработчик команд меню
-bot.onText(/\/(profile|utilization|statistics)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const command = match[1];
-    
-    let message = 'Функционал находится в разработке. Пожалуйста, попробуйте позже.';
-    await bot.sendMessage(chatId, message);
-});
-
-// Обработчик нажатия на inline кнопку
+// Обработчик нажатия на inline кнопки
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     
-    if (query.data === 'register') {
-        await deletePreviousMessage(chatId);
-        userStates[chatId] = { step: 'fio', isRegistering: true };
-        const sentMessage = await bot.sendMessage(chatId, 'Введите ФИО (только русские буквы):');
-        userStates[chatId].lastMessageId = sentMessage.message_id;
+    // Передаем обработку профильных действий в ProfileHandler
+    if (['my_profile', 'edit_profile', 'edit_fio', 'edit_age', 'edit_location', 'edit_photo', 'back_to_profile'].includes(query.data)) {
+        await profileHandler.handleCallbackQuery(query);
+        return;
+    }
+
+    switch (query.data) {
+        case 'register':
+            await deletePreviousMessage(chatId);
+            userStates[chatId] = { step: 'fio', isRegistering: true };
+            const sentMessage = await bot.sendMessage(chatId, 'Введите ФИО (только русские буквы):');
+            userStates[chatId].lastMessageId = sentMessage.message_id;
+            break;
+            
+        case 'my_awards':
+        case 'my_utilizations':
+        case 'my_statistics':
+            await bot.sendMessage(chatId, 'Функционал находится в разработке. Пожалуйста, попробуйте позже.');
+            break;
     }
 });
 
@@ -146,8 +184,15 @@ bot.on('callback_query', async (query) => {
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
+    const photo = msg.photo;
 
     if (text && text.startsWith('/')) return; // Пропускаем обработку команд
+
+    // Проверяем, редактируется ли профиль
+    if (profileHandler.userStates[chatId] && profileHandler.userStates[chatId].isEditing) {
+        await profileHandler.handleEdit(msg);
+        return;
+    }
 
     console.log('Получено сообщение:', text, 'от пользователя:', chatId);
 
@@ -192,17 +237,32 @@ bot.on('message', async (msg) => {
 
             case 'location':
                 userStates[chatId].location = text;
+                userStates[chatId].step = 'photo';
+                await deletePreviousMessage(chatId);
+                const photoMessage = await bot.sendMessage(chatId, 'Пожалуйста, отправьте вашу фотографию:');
+                userStates[chatId].lastMessageId = photoMessage.message_id;
+                break;
+
+            case 'photo':
+                if (!photo) {
+                    await deletePreviousMessage(chatId);
+                    const sentMessage = await bot.sendMessage(chatId, 'Пожалуйста, отправьте фотографию:');
+                    userStates[chatId].lastMessageId = sentMessage.message_id;
+                    return;
+                }
+
+                // Берем последнюю (самую качественную) версию фотографии
+                const photoId = photo[photo.length - 1].file_id;
+                
                 try {
                     const result = await pool.query(
-                        'INSERT INTO newtable (chat_id, fio, age, location) VALUES ($1, $2, $3, $4) RETURNING *',
-                        [chatId, userStates[chatId].fio, userStates[chatId].age, userStates[chatId].location]
+                        'INSERT INTO newtable (chat_id, fio, age, location, photo_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+                        [chatId, userStates[chatId].fio, userStates[chatId].age, userStates[chatId].location, photoId]
                     );
                     
                     console.log('Данные успешно записаны:', result.rows[0]);
 
                     await deletePreviousMessage(chatId);
-                    
-                    // Отправляем сообщение об успешной регистрации без клавиатуры
                     await bot.sendMessage(
                         chatId,
                         'Ваш профиль успешно зарегистрирован! Используйте меню слева (☰) для доступа к функциям бота.'
