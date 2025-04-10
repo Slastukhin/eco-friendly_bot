@@ -3,6 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { pool } = require('./database/db');
 const ProfileHandler = require('./handlers/profileHandler');
 const UtilizationHandler = require('./handlers/utilizationHandler');
+const UserUtilizationsHandler = require('./handlers/userUtilizationsHandler');
 
 // Инициализация бота
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
@@ -68,7 +69,8 @@ async function checkDatabaseConnection() {
                 collection_point_id INTEGER REFERENCES collection_points(id),
                 waste_type_id INTEGER REFERENCES waste_types(id),
                 weight DECIMAL(10,2) NOT NULL,
-                date_utilized DATE NOT NULL,
+                date_utilized DATE NOT NULL DEFAULT CURRENT_DATE,
+                time_utilized TIME NOT NULL DEFAULT CURRENT_TIME,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
@@ -251,7 +253,21 @@ bot.onText(/\/start/, async (msg) => {
     try {
         const result = await pool.query('SELECT * FROM users WHERE chat_id = $1', [chatId]);
         if (result.rows.length > 0) {
-            await bot.sendMessage(chatId, 'Вы уже зарегистрированы. Используйте меню слева для доступа к функциям бота.');
+            // Показываем главное меню для зарегистрированного пользователя
+            await bot.sendMessage(chatId, 'Выберите действие:', {
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: '🗑 Утилизировать', callback_data: 'utilization' },
+                            { text: '📊 Мои утилизации', callback_data: 'my_utilizations' }
+                        ],
+                        [
+                            { text: '👤 Мой профиль', callback_data: 'my_profile' },
+                            { text: '📋 О сервисе', callback_data: 'about' }
+                        ]
+                    ]
+                }
+            });
             return;
         }
     } catch (error) {
@@ -294,6 +310,51 @@ bot.on('callback_query', async (query) => {
         await UtilizationHandler.handlePointSelection(bot, query);
     } else if (data.startsWith('type_')) {
         await UtilizationHandler.handleTypeSelection(bot, query);
+    } else if (data === 'view_all_utilizations') {
+        await UserUtilizationsHandler.handleViewAllUtilizations(bot, query);
+    } else if (data === 'my_utilizations') {
+        await UserUtilizationsHandler.handleMyUtilizations(bot, chatId);
+    } else if (data === 'utilization') {
+        await UtilizationHandler.handleUtilizationCommand(bot, chatId);
+    } else if (data === 'about') {
+        const aboutMessage = `🌍 *Добро пожаловать в ECO Friendly Bot!*
+
+🌱 *Наша миссия:* 
+Помогаем делать мир чище, превращая сортировку отходов в увлекательный и полезный процесс!
+
+♻️ *Что умеет наш бот:*
+• Запись и отслеживание ваших утилизаций
+• Удобный поиск ближайших пунктов приема
+• Подробная статистика в Excel
+• Простой и понятный интерфейс
+
+📊 *Поддерживаемые типы отходов:*
+• Пластик
+• Бумага
+• Стекло
+• Металл
+• Батарейки
+
+🏆 *Почему именно мы:*
+• Работаем в 10 крупнейших городах России
+• Более 150 пунктов приема отходов
+• Детальная история всех утилизаций
+• Экспорт данных в Excel
+
+🤝 *Присоединяйтесь к нам:*
+Вместе мы делаем нашу планету чище! Каждая ваша утилизация - это вклад в будущее экологии.
+
+🎯 *Начните прямо сейчас:*
+Нажмите кнопку "Утилизировать" и внесите свой вклад в защиту окружающей среды!`;
+
+        await bot.sendMessage(chatId, aboutMessage, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '🗑 Утилизировать', callback_data: 'utilization' }]
+                ]
+            }
+        });
     }
     // Обработка профиля
     else if (['my_profile', 'edit_profile', 'edit_fio', 'edit_age', 'edit_location', 'edit_photo', 'back_to_profile'].includes(data)) {
@@ -315,6 +376,11 @@ bot.on('message', async (msg) => {
     const photo = msg.photo;
 
     if (text && text.startsWith('/')) return; // Пропускаем обработку команд
+
+    if (text === '📊 Мои утилизации') {
+        await UserUtilizationsHandler.handleMyUtilizations(bot, chatId);
+        return;
+    }
 
     // Проверяем, ожидаем ли мы ввод веса для утилизации
     if (bot.utilizationState && bot.utilizationState[chatId] && bot.utilizationState[chatId].step === 'weight') {
