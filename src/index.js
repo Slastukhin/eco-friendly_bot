@@ -394,16 +394,14 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Удаляем сообщение пользователя только во время регистрации
+    // Проверяем регистрацию
     if (userStates[chatId] && userStates[chatId].isRegistering) {
         try {
             await bot.deleteMessage(chatId, msg.message_id);
         } catch (error) {
             console.error('Ошибка при удалении сообщения пользователя:', error);
         }
-    }
 
-    if (userStates[chatId] && userStates[chatId].isRegistering) {
         switch (userStates[chatId].step) {
             case 'fio':
                 if (!/^[а-яА-ЯёЁ\s]+$/.test(text)) {
@@ -477,6 +475,44 @@ bot.on('message', async (msg) => {
                 }
                 break;
         }
+        return;
+    }
+
+    // Если дошли до этой точки, значит это "случайное" сообщение
+    // Проверяем, зарегистрирован ли пользователь
+    try {
+        const result = await pool.query('SELECT * FROM users WHERE chat_id = $1', [chatId]);
+        const message = result.rows.length > 0 
+            ? 'Извините, я не совсем понимаю, что от меня требуется, предлагаю воспользоваться доступным функционалом! Загляните в меню для более широкой выборки действий!'
+            : 'Для использования бота необходимо зарегистрироваться:';
+
+        const keyboard = result.rows.length > 0 
+            ? {
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: '🗑 Утилизировать', callback_data: 'utilization' },
+                            { text: '📊 Мои утилизации', callback_data: 'my_utilizations' }
+                        ],
+                        [
+                            { text: '👤 Мой профиль', callback_data: 'my_profile' },
+                            { text: '📋 О сервисе', callback_data: 'about' }
+                        ]
+                    ]
+                }
+            }
+            : {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: 'Регистрация', callback_data: 'register' }]
+                    ]
+                }
+            };
+
+        await bot.sendMessage(chatId, message, keyboard);
+    } catch (error) {
+        console.error('Ошибка при проверке регистрации:', error);
+        await bot.sendMessage(chatId, 'Произошла ошибка. Пожалуйста, попробуйте позже.');
     }
 });
 
