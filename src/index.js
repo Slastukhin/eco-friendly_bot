@@ -2,6 +2,7 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const { pool } = require('./database/db');
 const ProfileHandler = require('./handlers/profileHandler');
+const UtilizationHandler = require('./handlers/utilizationHandler');
 
 // Инициализация бота
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
@@ -15,33 +16,153 @@ async function checkDatabaseConnection() {
         const client = await pool.connect();
         console.log('Успешное подключение к базе данных');
 
-        // Проверяем существование таблицы
-        const tableCheck = await client.query(`
+        // Создаем таблицу пользователей
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                chat_id BIGINT NOT NULL UNIQUE,
+                fio VARCHAR(255) NOT NULL,
+                age INTEGER NOT NULL,
+                location VARCHAR(255) NOT NULL,
+                photo_id TEXT,
+                points INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // Создаем таблицу городов
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS cities (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(100) NOT NULL
+            );
+        `);
+
+        // Создаем таблицу пунктов приема
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS collection_points (
+                id SERIAL PRIMARY KEY,
+                city_id INTEGER REFERENCES cities(id),
+                address VARCHAR(255) NOT NULL,
+                is_default BOOLEAN DEFAULT TRUE,
+                user_id INTEGER REFERENCES users(id),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_visible_to_all BOOLEAN DEFAULT FALSE
+            );
+        `);
+
+        // Создаем таблицу типов отходов
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS waste_types (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(50) NOT NULL,
+                points_per_kg INTEGER NOT NULL DEFAULT 10
+            );
+        `);
+
+        // Создаем таблицу утилизаций
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS utilizations (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                collection_point_id INTEGER REFERENCES collection_points(id),
+                waste_type_id INTEGER REFERENCES waste_types(id),
+                weight DECIMAL(10,2) NOT NULL,
+                date_utilized DATE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // Проверяем наличие данных в таблице городов
+        const citiesCount = await client.query('SELECT COUNT(*) FROM cities');
+        if (citiesCount.rows[0].count === '0') {
+            // Заполняем города
+            await client.query(`
+                INSERT INTO cities (name) VALUES
+                ('Москва'),
+                ('Санкт-Петербург'),
+                ('Новосибирск'),
+                ('Екатеринбург'),
+                ('Казань'),
+                ('Нижний Новгород'),
+                ('Челябинск'),
+                ('Самара'),
+                ('Омск'),
+                ('Ростов-на-Дону');
+            `);
+        }
+
+        // Проверяем наличие данных в таблице пунктов приема
+        const pointsCount = await client.query('SELECT COUNT(*) FROM collection_points WHERE is_default = TRUE');
+        if (pointsCount.rows[0].count === '0') {
+            // Получаем список городов
+            const cities = await client.query('SELECT id FROM cities');
+            
+            // Для каждого города добавляем 15 пунктов приема
+            for (const city of cities.rows) {
+                await client.query(`
+                    INSERT INTO collection_points (city_id, address, is_default, is_visible_to_all) VALUES
+                    ($1, 'ул. Ленина, 15', TRUE, TRUE),
+                    ($1, 'пр. Мира, 78', TRUE, TRUE),
+                    ($1, 'ул. Гагарина, 42', TRUE, TRUE),
+                    ($1, 'ул. Пушкина, 23', TRUE, TRUE),
+                    ($1, 'пр. Победы, 91', TRUE, TRUE),
+                    ($1, 'ул. Космонавтов, 55', TRUE, TRUE),
+                    ($1, 'ул. Советская, 127', TRUE, TRUE),
+                    ($1, 'пр. Металлургов, 83', TRUE, TRUE),
+                    ($1, 'ул. Строителей, 64', TRUE, TRUE),
+                    ($1, 'ул. Заводская, 31', TRUE, TRUE),
+                    ($1, 'ул. Первомайская, 12', TRUE, TRUE),
+                    ($1, 'пр. Комсомольский, 45', TRUE, TRUE),
+                    ($1, 'ул. Революции, 89', TRUE, TRUE),
+                    ($1, 'ул. Молодежная, 56', TRUE, TRUE),
+                    ($1, 'пр. Энтузиастов, 73', TRUE, TRUE)
+                `, [city.id]);
+            }
+        }
+
+        // Проверяем наличие данных в таблице типов отходов
+        const typesCount = await client.query('SELECT COUNT(*) FROM waste_types');
+        if (typesCount.rows[0].count === '0') {
+            // Заполняем типы отходов
+            await client.query(`
+                INSERT INTO waste_types (name, points_per_kg) VALUES
+                ('Бумага', 10),
+                ('Картон', 8),
+                ('Пластик (PET)', 15),
+                ('Пластик (HDPE)', 12),
+                ('Стекло', 5),
+                ('Металл (алюминий)', 20),
+                ('Металл (жесть)', 15),
+                ('Батарейки', 30),
+                ('Электроника', 25),
+                ('Текстиль', 10);
+            `);
+        }
+
+        // Перенос данных из старой таблицы в новую
+        const oldTableExists = await client.query(`
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
                 WHERE table_name = 'newtable'
             );
         `);
 
-        if (!tableCheck.rows[0].exists) {
-            // Создаем таблицу только если она не существует
+        if (oldTableExists.rows[0].exists) {
+            // Переносим данные из старой таблицы в новую
             await client.query(`
-                CREATE TABLE newtable (
-                    id SERIAL PRIMARY KEY,
-                    chat_id BIGINT NOT NULL,
-                    fio VARCHAR(255) NOT NULL,
-                    age INTEGER NOT NULL,
-                    location VARCHAR(255) NOT NULL,
-                    photo_id TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
+                INSERT INTO users (chat_id, fio, age, location, photo_id)
+                SELECT chat_id, fio, age, location, photo_id
+                FROM newtable
+                ON CONFLICT (chat_id) DO NOTHING;
             `);
-            console.log('Таблица newtable создана');
-        } else {
-            console.log('Таблица newtable уже существует');
+
+            // Удаляем старую таблицу
+            await client.query('DROP TABLE IF EXISTS newtable;');
         }
 
         client.release();
+        console.log('Структура базы данных успешно обновлена');
     } catch (err) {
         console.error('Ошибка при проверке базы данных:', err);
     }
@@ -85,10 +206,9 @@ async function deletePreviousMessage(chatId) {
 // Обработчик команды /profile
 bot.onText(/\/profile/, async (msg) => {
     const chatId = msg.chat.id;
-
     try {
         // Проверяем, зарегистрирован ли пользователь
-        const result = await pool.query('SELECT * FROM newtable WHERE chat_id = $1', [chatId]);
+        const result = await pool.query('SELECT * FROM users WHERE chat_id = $1', [chatId]);
         
         if (result.rows.length === 0) {
             await bot.sendMessage(chatId, 'Для доступа к профилю необходимо зарегистрироваться.', {
@@ -129,7 +249,7 @@ bot.onText(/\/start/, async (msg) => {
 
     // Проверяем, зарегистрирован ли пользователь
     try {
-        const result = await pool.query('SELECT * FROM newtable WHERE chat_id = $1', [chatId]);
+        const result = await pool.query('SELECT * FROM users WHERE chat_id = $1', [chatId]);
         if (result.rows.length > 0) {
             await bot.sendMessage(chatId, 'Вы уже зарегистрированы. Используйте меню слева для доступа к функциям бота.');
             return;
@@ -154,33 +274,41 @@ bot.onText(/\/start/, async (msg) => {
     }
 });
 
-// Обработчик нажатия на inline кнопки
+// Обработчик команды /utilization
+bot.onText(/\/utilization/, async (msg) => {
+    const chatId = msg.chat.id;
+    await UtilizationHandler.handleUtilizationCommand(bot, chatId);
+});
+
+// Обработка callback запросов
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
-    
-    // Передаем обработку профильных действий в ProfileHandler
-    if (['my_profile', 'edit_profile', 'edit_fio', 'edit_age', 'edit_location', 'edit_photo', 'back_to_profile'].includes(query.data)) {
-        await profileHandler.handleCallbackQuery(query);
-        return;
-    }
+    const data = query.data;
 
-    switch (query.data) {
-        case 'register':
-            await deletePreviousMessage(chatId);
-            userStates[chatId] = { step: 'fio', isRegistering: true };
-            const sentMessage = await bot.sendMessage(chatId, 'Введите ФИО (только русские буквы):');
-            userStates[chatId].lastMessageId = sentMessage.message_id;
-            break;
-            
-        case 'my_awards':
-        case 'my_utilizations':
-        case 'my_statistics':
-            await bot.sendMessage(chatId, 'Функционал находится в разработке. Пожалуйста, попробуйте позже.');
-            break;
+    // Обработка утилизации
+    if (data.startsWith('city_')) {
+        await UtilizationHandler.handleCitySelection(bot, query);
+    } else if (data === 'back_to_cities') {
+        await UtilizationHandler.handleBackToCities(bot, query);
+    } else if (data.startsWith('point_')) {
+        await UtilizationHandler.handlePointSelection(bot, query);
+    } else if (data.startsWith('type_')) {
+        await UtilizationHandler.handleTypeSelection(bot, query);
+    }
+    // Обработка профиля
+    else if (['my_profile', 'edit_profile', 'edit_fio', 'edit_age', 'edit_location', 'edit_photo', 'back_to_profile'].includes(data)) {
+        await profileHandler.handleCallbackQuery(query);
+    }
+    // Обработка регистрации
+    else if (data === 'register') {
+        await deletePreviousMessage(chatId);
+        userStates[chatId] = { step: 'fio', isRegistering: true };
+        const sentMessage = await bot.sendMessage(chatId, 'Введите ФИО (только русские буквы):');
+        userStates[chatId].lastMessageId = sentMessage.message_id;
     }
 });
 
-// Обработчик сообщений
+// Обработка текстовых сообщений
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
@@ -188,13 +316,17 @@ bot.on('message', async (msg) => {
 
     if (text && text.startsWith('/')) return; // Пропускаем обработку команд
 
+    // Проверяем, ожидаем ли мы ввод веса для утилизации
+    if (bot.utilizationState && bot.utilizationState[chatId] && bot.utilizationState[chatId].step === 'weight') {
+        await UtilizationHandler.handleWeightInput(bot, msg);
+        return;
+    }
+
     // Проверяем, редактируется ли профиль
     if (profileHandler.userStates[chatId] && profileHandler.userStates[chatId].isEditing) {
         await profileHandler.handleEdit(msg);
         return;
     }
-
-    console.log('Получено сообщение:', text, 'от пользователя:', chatId);
 
     // Удаляем сообщение пользователя только во время регистрации
     if (userStates[chatId] && userStates[chatId].isRegistering) {
@@ -256,7 +388,7 @@ bot.on('message', async (msg) => {
                 
                 try {
                     const result = await pool.query(
-                        'INSERT INTO newtable (chat_id, fio, age, location, photo_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+                        'INSERT INTO users (chat_id, fio, age, location, photo_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
                         [chatId, userStates[chatId].fio, userStates[chatId].age, userStates[chatId].location, photoId]
                     );
                     
