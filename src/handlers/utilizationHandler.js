@@ -180,7 +180,7 @@ class UtilizationHandler {
 
             const userId = await this.getUserId(chatId);
 
-            // Получаем ID типа отходов
+            // Обновляем маппинг в соответствии с базой данных
             const typeMapping = {
                 'plastic': 'Пластик (PET)',
                 'paper': 'Бумага',
@@ -189,24 +189,32 @@ class UtilizationHandler {
                 'batteries': 'Батарейки'
             };
 
+            // Добавляем логирование для отладки
+            console.log('Looking for waste type:', typeMapping[state.type]);
+            
             const wasteTypeResult = await pool.query(
                 'SELECT id FROM waste_types WHERE name = $1',
                 [typeMapping[state.type]]
             );
 
+            console.log('Waste type query result:', wasteTypeResult.rows);
+
             if (wasteTypeResult.rows.length === 0) {
-                throw new Error('Waste type not found');
+                throw new Error(`Waste type not found: ${typeMapping[state.type]}`);
             }
 
             const wasteTypeId = wasteTypeResult.rows[0].id;
 
             // Записываем утилизацию в базу данных
-            await pool.query(
+            const result = await pool.query(
                 `INSERT INTO utilizations 
-                (user_id, collection_point_id, waste_type_id, weight, date_utilized) 
-                VALUES ($1, $2, $3, $4, NOW())`,
+                (user_id, collection_point_id, waste_type_id, weight, date_utilized, time_utilized) 
+                VALUES ($1, $2, $3, $4, CURRENT_DATE, CURRENT_TIME)
+                RETURNING *`,
                 [userId, state.pointId, wasteTypeId, weight]
             );
+
+            console.log('Utilization created:', result.rows[0]);
 
             // Отправляем сообщение об успехе
             await bot.sendMessage(chatId, 
