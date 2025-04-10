@@ -4,6 +4,7 @@ const { pool } = require('./database/db');
 const ProfileHandler = require('./handlers/profileHandler');
 const UtilizationHandler = require('./handlers/utilizationHandler');
 const UserUtilizationsHandler = require('./handlers/userUtilizationsHandler');
+const AwardsHandler = require('./handlers/awardsHandler');
 
 // Инициализация бота
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
@@ -13,8 +14,9 @@ const profileHandler = new ProfileHandler(bot);
 
 // Проверка подключения к базе данных и структуры таблицы
 async function checkDatabaseConnection() {
+    let client;
     try {
-        const client = await pool.connect();
+        client = await pool.connect();
         console.log('Успешное подключение к базе данных');
 
         // Создаем таблицу пользователей
@@ -28,6 +30,18 @@ async function checkDatabaseConnection() {
                 photo_id TEXT,
                 points INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // Создаем таблицу наград
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS awards (
+                id SERIAL PRIMARY KEY,
+                chat_id BIGINT NOT NULL,
+                name VARCHAR(255) NOT NULL,
+                description TEXT,
+                awarded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (chat_id) REFERENCES users(chat_id) ON DELETE CASCADE
             );
         `);
 
@@ -163,10 +177,13 @@ async function checkDatabaseConnection() {
             await client.query('DROP TABLE IF EXISTS newtable;');
         }
 
-        client.release();
         console.log('Структура базы данных успешно обновлена');
     } catch (err) {
         console.error('Ошибка при проверке базы данных:', err);
+    } finally {
+        if (client) {
+            await client.release();
+        }
     }
 }
 
@@ -316,6 +333,10 @@ bot.on('callback_query', async (query) => {
         await UserUtilizationsHandler.handleMyUtilizations(bot, chatId);
     } else if (data === 'utilization') {
         await UtilizationHandler.handleUtilizationCommand(bot, chatId);
+    } else if (data === 'my_awards' || data === 'refresh_awards') {
+        await AwardsHandler.handleMyAwards(bot, chatId);
+    } else if (data === 'download_awards') {
+        await AwardsHandler.handleDownloadAwards(bot, chatId);
     } else if (data === 'about') {
         const aboutMessage = `🌍 *Добро пожаловать в ECO Friendly Bot!*
 
