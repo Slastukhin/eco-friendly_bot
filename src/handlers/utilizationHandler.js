@@ -1,4 +1,5 @@
 const { pool } = require('../database/db');
+const Award = require('../models/award');
 
 class UtilizationHandler {
     static async handleUtilizationCommand(bot, chatId) {
@@ -148,9 +149,18 @@ class UtilizationHandler {
         const type = query.data.split('_')[1];
         
         try {
+            // Преобразуем тип отходов в название из базы данных
+            const typeMapping = {
+                'plastic': 'Пластик (PET)',
+                'paper': 'Бумага',
+                'glass': 'Стекло',
+                'metal': 'Металл (алюминий)',
+                'batteries': 'Батарейки'
+            };
+
             // Сохраняем тип в состоянии
             if (!bot.utilizationState[chatId]) bot.utilizationState[chatId] = {};
-            bot.utilizationState[chatId].type = type;
+            bot.utilizationState[chatId].type = typeMapping[type];
             bot.utilizationState[chatId].step = 'weight';
 
             await bot.editMessageText('Введите вес отходов в килограммах (например: 1.5):', {
@@ -167,42 +177,31 @@ class UtilizationHandler {
         const chatId = msg.chat.id;
         const weight = parseFloat(msg.text);
 
+        if (!bot.utilizationState || !bot.utilizationState[chatId]) {
+            await bot.sendMessage(chatId, 'Пожалуйста, начните процесс утилизации заново с помощью команды /utilization');
+            return;
+        }
+
+        const state = bot.utilizationState[chatId];
+
         if (isNaN(weight) || weight <= 0) {
-            await bot.sendMessage(chatId, 'Пожалуйста, введите корректное число для веса (например: 1.5)');
+            await bot.sendMessage(chatId, 'Пожалуйста, введите корректный вес в килограммах (например: 2.5)');
             return;
         }
 
         try {
-            const state = bot.utilizationState[chatId];
-            if (!state || !state.pointId || !state.type) {
-                throw new Error('Missing utilization state data');
+            // Получаем id пользователя
+            const userResult = await pool.query('SELECT id FROM users WHERE chat_id = $1', [chatId]);
+            if (userResult.rows.length === 0) {
+                throw new Error('Пользователь не найден');
             }
+            const userId = userResult.rows[0].id;
 
-            const userId = await this.getUserId(chatId);
-
-            // Обновляем маппинг в соответствии с базой данных
-            const typeMapping = {
-                'plastic': 'Пластик (PET)',
-                'paper': 'Бумага',
-                'glass': 'Стекло',
-                'metal': 'Металл (алюминий)',
-                'batteries': 'Батарейки'
-            };
-
-            // Добавляем логирование для отладки
-            console.log('Looking for waste type:', typeMapping[state.type]);
-            
-            const wasteTypeResult = await pool.query(
-                'SELECT id FROM waste_types WHERE name = $1',
-                [typeMapping[state.type]]
-            );
-
-            console.log('Waste type query result:', wasteTypeResult.rows);
-
+            // Получаем id типа отходов
+            const wasteTypeResult = await pool.query('SELECT id FROM waste_types WHERE name = $1', [state.type]);
             if (wasteTypeResult.rows.length === 0) {
-                throw new Error(`Waste type not found: ${typeMapping[state.type]}`);
+                throw new Error('Тип отходов не найден');
             }
-
             const wasteTypeId = wasteTypeResult.rows[0].id;
 
             // Записываем утилизацию в базу данных
@@ -216,11 +215,26 @@ class UtilizationHandler {
 
             console.log('Utilization created:', result.rows[0]);
 
+            // Создаем награду за утилизацию
+            const award = await Award.create(
+                chatId,
+                '🏆 Награда за утилизацию',
+                `Утилизация ${weight} кг ${state.type}`
+            );
+
+            // Получаем общее количество наград пользователя
+            const awardsCount = await pool.query(
+                'SELECT COUNT(*) as count FROM awards WHERE chat_id = $1',
+                [chatId]
+            );
+
             // Отправляем сообщение об успехе
             await bot.sendMessage(chatId, 
                 `✅ Отлично! Утилизация записана:\n` +
-                `Тип отходов: ${typeMapping[state.type]}\n` +
+                `Тип отходов: ${state.type}\n` +
                 `Вес: ${weight} кг\n\n` +
+                `За эту сдачу мусора вам начислено 1🏆, всего у вас ${awardsCount.rows[0].count}🏆 наград.\n` +
+                `Все награды вы можете посмотреть в профиле.\n\n` +
                 `Спасибо за вклад в защиту экологии! 🌍`
             );
 

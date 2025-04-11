@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS awards (
+    id SERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    awarded_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (chat_id) REFERENCES users(chat_id) ON DELETE CASCADE
+); 
