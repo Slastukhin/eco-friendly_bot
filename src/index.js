@@ -5,6 +5,7 @@ const ProfileHandler = require('./handlers/profileHandler');
 const UtilizationHandler = require('./handlers/utilizationHandler');
 const UserUtilizationsHandler = require('./handlers/userUtilizationsHandler');
 const AwardsHandler = require('./handlers/awardsHandler');
+const StatisticsHandler = require('./handlers/statisticsHandler');
 
 // Инициализация бота
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
@@ -318,27 +319,36 @@ bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     const data = query.data;
 
-    // Обработка утилизации
-    if (data.startsWith('city_')) {
-        await UtilizationHandler.handleCitySelection(bot, query);
-    } else if (data === 'back_to_cities') {
-        await UtilizationHandler.handleBackToCities(bot, query);
-    } else if (data.startsWith('point_')) {
-        await UtilizationHandler.handlePointSelection(bot, query);
-    } else if (data.startsWith('type_')) {
-        await UtilizationHandler.handleTypeSelection(bot, query);
-    } else if (data === 'view_all_utilizations') {
-        await UserUtilizationsHandler.handleViewAllUtilizations(bot, query);
-    } else if (data === 'my_utilizations') {
-        await UserUtilizationsHandler.handleMyUtilizations(bot, chatId);
-    } else if (data === 'utilization') {
-        await UtilizationHandler.handleUtilizationCommand(bot, chatId);
-    } else if (data === 'my_awards' || data === 'refresh_awards') {
-        await AwardsHandler.handleMyAwards(bot, chatId);
-    } else if (data === 'download_awards') {
-        await AwardsHandler.handleDownloadAwards(bot, chatId);
-    } else if (data === 'about') {
-        const aboutMessage = `🌍 *Добро пожаловать в ECO Friendly Bot!*
+    try {
+        // Обработка утилизации
+        if (data.startsWith('city_')) {
+            await UtilizationHandler.handleCitySelection(bot, query);
+        } else if (data === 'back_to_cities') {
+            await UtilizationHandler.handleBackToCities(bot, query);
+        } else if (data.startsWith('point_')) {
+            await UtilizationHandler.handlePointSelection(bot, query);
+        } else if (data.startsWith('type_')) {
+            await UtilizationHandler.handleTypeSelection(bot, query);
+        } else if (data === 'view_all_utilizations') {
+            await UserUtilizationsHandler.handleViewAllUtilizations(bot, query);
+        } else if (data === 'my_utilizations') {
+            await UserUtilizationsHandler.handleMyUtilizations(bot, chatId);
+        } else if (data === 'utilization') {
+            await UtilizationHandler.handleUtilizationCommand(bot, chatId);
+        } else if (data === 'my_awards' || data === 'refresh_awards') {
+            await AwardsHandler.handleMyAwards(bot, chatId);
+        } else if (data === 'download_awards') {
+            await AwardsHandler.handleDownloadAwards(bot, chatId);
+        } else if (data === 'my_statistics') {
+            await StatisticsHandler.handleStatisticsMenu(bot, chatId);
+        } else if (data === 'stats_cities') {
+            await StatisticsHandler.handleCitiesStats(bot, chatId);
+        } else if (data === 'stats_points') {
+            await StatisticsHandler.handlePointsStats(bot, chatId);
+        } else if (data === 'stats_materials') {
+            await StatisticsHandler.handleMaterialsStats(bot, chatId);
+        } else if (data === 'about') {
+            const aboutMessage = `🌍 *Добро пожаловать в ECO Friendly Bot!*
 
 🌱 *Наша миссия:* 
 Помогаем делать мир чище, превращая сортировку отходов в увлекательный и полезный процесс!
@@ -368,25 +378,28 @@ bot.on('callback_query', async (query) => {
 🎯 *Начните прямо сейчас:*
 Нажмите кнопку "Утилизировать" и внесите свой вклад в защиту окружающей среды!`;
 
-        await bot.sendMessage(chatId, aboutMessage, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '🗑 Утилизировать', callback_data: 'utilization' }]
-                ]
-            }
-        });
-    }
-    // Обработка профиля
-    else if (['my_profile', 'edit_profile', 'edit_fio', 'edit_age', 'edit_location', 'edit_photo', 'back_to_profile'].includes(data)) {
-        await profileHandler.handleCallbackQuery(query);
-    }
-    // Обработка регистрации
-    else if (data === 'register') {
-        await deletePreviousMessage(chatId);
-        userStates[chatId] = { step: 'fio', isRegistering: true };
-        const sentMessage = await bot.sendMessage(chatId, 'Введите ФИО (только русские буквы):');
-        userStates[chatId].lastMessageId = sentMessage.message_id;
+            await bot.sendMessage(chatId, aboutMessage, {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '🗑 Утилизировать', callback_data: 'utilization' }]
+                    ]
+                }
+            });
+        }
+        // Обработка профиля
+        else if (['my_profile', 'edit_profile', 'edit_fio', 'edit_age', 'edit_location', 'edit_photo', 'back_to_profile'].includes(data)) {
+            await profileHandler.handleCallbackQuery(query);
+        }
+        // Обработка регистрации
+        else if (data === 'register') {
+            await deletePreviousMessage(chatId);
+            userStates[chatId] = { step: 'fio', isRegistering: true };
+            const sentMessage = await bot.sendMessage(chatId, 'Введите ФИО (только русские буквы):');
+            userStates[chatId].lastMessageId = sentMessage.message_id;
+        }
+    } catch (error) {
+        console.error('Ошибка при обработке callback запроса:', error);
     }
 });
 
