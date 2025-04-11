@@ -195,8 +195,7 @@ checkDatabaseConnection();
 bot.setMyCommands([
     { command: 'start', description: 'Начать работу с ботом' },
     { command: 'profile', description: 'Исследовать профиль' },
-    { command: 'utilization', description: 'Записать утилизацию' },
-    { command: 'statistics', description: 'Статистика' }
+    { command: 'utilization', description: 'Записать утилизацию' }
 ]);
 
 // Объект для хранения состояния пользователей и ID сообщений
