@@ -6,7 +6,7 @@ class ShopHandler {
             console.log('Начинаем загрузку магазина для chatId:', chatId);
             
             // Проверяем, зарегистрирован ли пользователь
-            const userResult = await pool.query('SELECT id FROM users WHERE chat_id = $1', [chatId]);
+            const userResult = await pool.query('SELECT id, points FROM users WHERE chat_id = $1', [chatId]);
             console.log('Результат проверки пользователя:', userResult.rows);
             
             if (userResult.rows.length === 0) {
@@ -22,123 +22,65 @@ class ShopHandler {
             }
 
             const userId = userResult.rows[0].id;
+            const userPoints = userResult.rows[0].points || 0;
             console.log('ID пользователя:', userId);
 
-            // Проверяем существование таблицы sticker_packs
-            const tableCheck = await pool.query(`
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_name = 'sticker_packs'
-                );
-            `);
-            console.log('Проверка существования таблицы sticker_packs:', tableCheck.rows[0].exists);
-
-            if (!tableCheck.rows[0].exists) {
-                console.log('Таблица sticker_packs не существует, создаем...');
-                // Создаем таблицу если она не существует
-                await pool.query(`
-                    CREATE TABLE IF NOT EXISTS sticker_packs (
-                        id SERIAL PRIMARY KEY,
-                        name VARCHAR(100) NOT NULL,
-                        description TEXT,
-                        price INTEGER NOT NULL CHECK (price BETWEEN 1 AND 5),
-                        pack_url VARCHAR(255) NOT NULL,
-                        preview_sticker_file_id VARCHAR(255),
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-
-                    CREATE TABLE IF NOT EXISTS user_sticker_packs (
-                        id SERIAL PRIMARY KEY,
-                        user_id INTEGER REFERENCES users(id),
-                        sticker_pack_id INTEGER REFERENCES sticker_packs(id),
-                        purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(user_id, sticker_pack_id)
-                    );
-
-                    -- Добавляем первый стикерпак если таблица пуста
-                    INSERT INTO sticker_packs (name, description, price, pack_url)
-                    SELECT 'Милые Котики', 'Самые милые котики для любителей животных!', 3, 'https://t.me/addstickers/Cat_sticker_pack_slast'
-                    WHERE NOT EXISTS (SELECT 1 FROM sticker_packs);
-                `);
-            }
-
             // Получаем все доступные стикерпаки
-            const stickerPacks = await pool.query('SELECT * FROM sticker_packs ORDER BY price ASC');
-            console.log('Найдено стикерпаков:', stickerPacks.rows.length);
-            
-            // Получаем количество наград пользователя
-            const userAwards = await pool.query(
-                'SELECT COUNT(*) as count FROM awards WHERE chat_id = $1',
-                [chatId]
-            );
-            const awardsCount = parseInt(userAwards.rows[0].count);
-            console.log('Количество наград у пользователя:', awardsCount);
-            
-            const purchasedPacks = await pool.query(
-                'SELECT sticker_pack_id FROM user_sticker_packs WHERE user_id = $1',
-                [userId]
-            );
-            const purchasedPackIds = new Set(purchasedPacks.rows.map(row => row.sticker_pack_id));
-            console.log('Купленные стикерпаки:', Array.from(purchasedPackIds));
+            const stickerPacks = await pool.query(`
+                SELECT sp.*, 
+                       CASE WHEN usp.id IS NOT NULL THEN true ELSE false END as is_purchased
+                FROM sticker_packs sp
+                LEFT JOIN user_sticker_packs usp ON sp.id = usp.sticker_pack_id AND usp.user_id = $1
+                ORDER BY sp.price ASC
+            `, [userId]);
 
-            // Формируем сообщение магазина
-            let message = `🎨 *Магазин стикеров*\n\n`;
-            message += `У вас ${awardsCount}🏆 наград\n\n`;
-            message += `Доступные стикерпаки:\n`;
-
-            // Создаем клавиатуру с стикерпаками
-            const keyboard = {
-                inline_keyboard: []
-            };
+            let message = `🎨 Магазин стикеров\n\nУ вас ${userPoints}🏆 наград\n\nДоступные стикерпаки:\n\n`;
+            const keyboard = [];
 
             for (const pack of stickerPacks.rows) {
-                const isPurchased = purchasedPackIds.has(pack.id);
-                message += `\n*${pack.name}*\n`;
-                message += `${pack.description}\n`;
-                message += `Цена: ${pack.price}🏆\n`;
-                
-                if (isPurchased) {
+                message += `${pack.name}\n${pack.description}\nЦена: ${pack.price}🏆\n`;
+                if (pack.is_purchased) {
                     message += '✅ Уже приобретен\n';
-                    keyboard.inline_keyboard.push([
-                        {
-                            text: '➕ Добавить стикеры к себе',
-                            url: pack.pack_url
-                        }
-                    ]);
-                } else {
-                    keyboard.inline_keyboard.push([
-                        {
-                            text: `Купить ${pack.name} (${pack.price}🏆)`,
-                            callback_data: `buy_sticker_pack:${pack.id}`
-                        }
-                    ]);
                 }
+                message += '\n';
+
+                const row = [];
+                
+                // Добавляем кнопку предпросмотра
+                row.push({ 
+                    text: '👁 Посмотреть стикеры', 
+                    callback_data: `preview_sticker_pack:${pack.id}` 
+                });
+
+                // Добавляем кнопку покупки, если пак еще не куплен
+                if (!pack.is_purchased) {
+                    row.push({ 
+                        text: `Купить (${pack.price}🏆)`, 
+                        callback_data: `buy_sticker_pack:${pack.id}` 
+                    });
+                }
+                
+                keyboard.push(row);
             }
 
-            keyboard.inline_keyboard.push([
-                { text: '« Назад в профиль', callback_data: 'back_to_profile' }
-            ]);
+            keyboard.push([{ text: '« Назад в профиль', callback_data: 'back_to_profile' }]);
 
-            console.log('Отправляем сообщение с магазином');
             await bot.sendMessage(chatId, message, {
-                parse_mode: 'Markdown',
-                reply_markup: keyboard
+                reply_markup: {
+                    inline_keyboard: keyboard
+                }
             });
-            console.log('Сообщение с магазином успешно отправлено');
+
         } catch (error) {
-            console.error('Детальная ошибка при открытии магазина:', error);
-            console.error('Stack trace:', error.stack);
-            await bot.sendMessage(chatId, 'Произошла ошибка при загрузке магазина стикеров.');
+            console.error('Ошибка при отображении магазина:', error);
+            await bot.sendMessage(chatId, 'Произошла ошибка при загрузке магазина. Пожалуйста, попробуйте позже.');
         }
     }
 
-    static async handleBuyPack(bot, chatId, packId) {
+    static async handlePreviewPack(bot, chatId, packId) {
         try {
             // Получаем информацию о стикерпаке
-            const packResult = await pool.query(
-                'SELECT * FROM sticker_packs WHERE id = $1',
-                [packId]
-            );
+            const packResult = await pool.query('SELECT * FROM sticker_packs WHERE id = $1', [packId]);
             
             if (packResult.rows.length === 0) {
                 await bot.sendMessage(chatId, 'Стикерпак не найден.');
@@ -147,13 +89,58 @@ class ShopHandler {
 
             const pack = packResult.rows[0];
 
-            // Получаем id пользователя
-            const userResult = await pool.query('SELECT id FROM users WHERE chat_id = $1', [chatId]);
+            // Отправляем сообщение с превью стикеров
+            await bot.sendMessage(chatId, 
+                `🎨 Предпросмотр стикерпака "${pack.name}"\n\n` +
+                `${pack.description}\n\n` +
+                `Стоимость: ${pack.price}🏆\n\n` +
+                `Нажмите на ссылку, чтобы посмотреть стикеры:\n` +
+                `${pack.pack_url}`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: 'Купить стикерпак', callback_data: `buy_sticker_pack:${packId}` },
+                                { text: '« Назад в магазин', callback_data: 'shop' }
+                            ]
+                        ]
+                    }
+                }
+            );
+
+            // Если есть превью-стикер, отправляем его
+            if (pack.preview_sticker_file_id) {
+                await bot.sendSticker(chatId, pack.preview_sticker_file_id);
+            }
+
+        } catch (error) {
+            console.error('Ошибка при показе превью стикерпака:', error);
+            await bot.sendMessage(chatId, 'Произошла ошибка при загрузке превью. Пожалуйста, попробуйте позже.');
+        }
+    }
+
+    static async handleBuyPack(bot, chatId, packId) {
+        try {
+            // Получаем информацию о пользователе
+            const userResult = await pool.query('SELECT id, points FROM users WHERE chat_id = $1', [chatId]);
+            
             if (userResult.rows.length === 0) {
-                await bot.sendMessage(chatId, 'Необходимо зарегистрироваться.');
+                await bot.sendMessage(chatId, 'Пользователь не найден.');
                 return;
             }
+
             const userId = userResult.rows[0].id;
+            const userPoints = userResult.rows[0].points || 0;
+
+            // Получаем информацию о стикерпаке
+            const packResult = await pool.query('SELECT * FROM sticker_packs WHERE id = $1', [packId]);
+            
+            if (packResult.rows.length === 0) {
+                await bot.sendMessage(chatId, 'Стикерпак не найден.');
+                return;
+            }
+
+            const pack = packResult.rows[0];
 
             // Проверяем, не куплен ли уже этот стикерпак
             const purchaseCheck = await pool.query(
@@ -162,22 +149,16 @@ class ShopHandler {
             );
 
             if (purchaseCheck.rows.length > 0) {
-                await bot.sendMessage(chatId, 'Вы уже приобрели этот стикерпак!');
+                await bot.sendMessage(chatId, 'Вы уже приобрели этот стикерпак.');
                 return;
             }
 
-            // Проверяем количество наград
-            const awardsCount = await pool.query(
-                'SELECT COUNT(*) as count FROM awards WHERE chat_id = $1',
-                [chatId]
-            );
-
-            const userAwards = parseInt(awardsCount.rows[0].count);
-
-            if (userAwards < pack.price) {
-                await bot.sendMessage(
-                    chatId,
-                    `❌ У вас недостаточно наград для покупки.\nНеобходимо: ${pack.price}🏆\nУ вас есть: ${userAwards}🏆`
+            // Проверяем достаточно ли наград
+            if (userPoints < pack.price) {
+                await bot.sendMessage(chatId, 
+                    `У вас недостаточно наград для покупки.\n` +
+                    `Необходимо: ${pack.price}🏆\n` +
+                    `У вас есть: ${userPoints}🏆`
                 );
                 return;
             }
@@ -187,10 +168,10 @@ class ShopHandler {
             try {
                 await client.query('BEGIN');
 
-                // Списываем награды (удаляем самые старые)
+                // Списываем награды
                 await client.query(
-                    'DELETE FROM awards WHERE id IN (SELECT id FROM awards WHERE chat_id = $1 ORDER BY id ASC LIMIT $2)',
-                    [chatId, pack.price]
+                    'UPDATE users SET points = points - $1 WHERE id = $2',
+                    [pack.price, userId]
                 );
 
                 // Записываем покупку
@@ -202,28 +183,30 @@ class ShopHandler {
                 await client.query('COMMIT');
 
                 // Отправляем сообщение об успешной покупке
-                await bot.sendMessage(
-                    chatId,
-                    `✅ Поздравляем с приобретением стикерпака "${pack.name}"!\n\n` +
-                    `Нажмите на ссылку ниже, чтобы добавить стикеры:\n${pack.pack_url}`,
+                await bot.sendMessage(chatId, 
+                    `✅ Поздравляем с покупкой стикерпака "${pack.name}"!\n\n` +
+                    `Чтобы добавить стикеры, перейдите по ссылке:\n` +
+                    `${pack.pack_url}\n\n` +
+                    `Оставшиеся награды: ${userPoints - pack.price}🏆`,
                     {
                         reply_markup: {
                             inline_keyboard: [
-                                [{ text: 'Добавить стикеры', url: pack.pack_url }],
                                 [{ text: '« Назад в магазин', callback_data: 'shop' }]
                             ]
                         }
                     }
                 );
+
             } catch (error) {
                 await client.query('ROLLBACK');
                 throw error;
             } finally {
                 client.release();
             }
+
         } catch (error) {
             console.error('Ошибка при покупке стикерпака:', error);
-            await bot.sendMessage(chatId, 'Произошла ошибка при покупке стикерпака.');
+            await bot.sendMessage(chatId, 'Произошла ошибка при покупке. Пожалуйста, попробуйте позже.');
         }
     }
 }

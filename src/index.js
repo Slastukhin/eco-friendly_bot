@@ -392,6 +392,9 @@ bot.on('callback_query', async (query) => {
             });
         } else if (data === 'shop') {
             await ShopHandler.handleShopMenu(bot, chatId);
+        } else if (data.startsWith('preview_sticker_pack:')) {
+            const packId = parseInt(data.split(':')[1]);
+            await ShopHandler.handlePreviewPack(bot, chatId, packId);
         } else if (data.startsWith('buy_sticker_pack:')) {
             const packId = parseInt(data.split(':')[1]);
             await ShopHandler.handleBuyPack(bot, chatId, packId);
