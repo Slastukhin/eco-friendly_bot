@@ -6,6 +6,7 @@ const UtilizationHandler = require('./handlers/utilizationHandler');
 const UserUtilizationsHandler = require('./handlers/userUtilizationsHandler');
 const AwardsHandler = require('./handlers/awardsHandler');
 const StatisticsHandler = require('./handlers/statisticsHandler');
+const ShopHandler = require('./handlers/shopHandler');
 
 // Инициализация бота
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
@@ -195,7 +196,8 @@ checkDatabaseConnection();
 bot.setMyCommands([
     { command: 'start', description: 'Начать работу с ботом' },
     { command: 'profile', description: 'Исследовать профиль' },
-    { command: 'utilization', description: 'Записать утилизацию' }
+    { command: 'utilization', description: 'Записать утилизацию' },
+    { command: 'shop', description: 'Магазин стикеров' }
 ]);
 
 // Объект для хранения состояния пользователей и ID сообщений
@@ -280,6 +282,9 @@ bot.onText(/\/start/, async (msg) => {
                         ],
                         [
                             { text: '👤 Мой профиль', callback_data: 'my_profile' },
+                            { text: '🎨 Магазин стикеров', callback_data: 'shop' }
+                        ],
+                        [
                             { text: '📋 О сервисе', callback_data: 'about' }
                         ]
                     ]
@@ -385,6 +390,11 @@ bot.on('callback_query', async (query) => {
                     ]
                 }
             });
+        } else if (data === 'shop') {
+            await ShopHandler.handleShopMenu(bot, chatId);
+        } else if (data.startsWith('buy_sticker_pack:')) {
+            const packId = parseInt(data.split(':')[1]);
+            await ShopHandler.handleBuyPack(bot, chatId, packId);
         }
         // Обработка профиля
         else if (['my_profile', 'edit_profile', 'edit_fio', 'edit_age', 'edit_location', 'edit_photo', 'back_to_profile'].includes(data)) {
@@ -529,6 +539,9 @@ bot.on('message', async (msg) => {
                         ],
                         [
                             { text: '👤 Мой профиль', callback_data: 'my_profile' },
+                            { text: '🎨 Магазин стикеров', callback_data: 'shop' }
+                        ],
+                        [
                             { text: '📋 О сервисе', callback_data: 'about' }
                         ]
                     ]
@@ -547,6 +560,12 @@ bot.on('message', async (msg) => {
         console.error('Ошибка при проверке регистрации:', error);
         await bot.sendMessage(chatId, 'Произошла ошибка. Пожалуйста, попробуйте позже.');
     }
+});
+
+// Добавляем обработчик команды /shop
+bot.onText(/\/shop/, async (msg) => {
+    const chatId = msg.chat.id;
+    await ShopHandler.handleShopMenu(bot, chatId);
 });
 
 // Обработка ошибок бота

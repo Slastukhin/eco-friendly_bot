@@ -171,7 +171,8 @@ class ProfileHandler {
                             [{ text: 'Редактировать профиль', callback_data: 'edit_profile' }],
                             [{ text: 'Мои награды', callback_data: 'my_awards' }],
                             [{ text: 'Мои утилизации', callback_data: 'my_utilizations' }],
-                            [{ text: 'Моя статистика', callback_data: 'my_statistics' }]
+                            [{ text: 'Моя статистика', callback_data: 'my_statistics' }],
+                            [{ text: '🎨 Магазин стикеров', callback_data: 'shop' }]
                         ]
                     }
                 });
