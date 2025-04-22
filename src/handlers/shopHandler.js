@@ -6,7 +6,7 @@ class ShopHandler {
             console.log('Начинаем загрузку магазина для chatId:', chatId);
             
             // Проверяем, зарегистрирован ли пользователь
-            const userResult = await pool.query('SELECT id, points FROM users WHERE chat_id = $1', [chatId]);
+            const userResult = await pool.query('SELECT id FROM users WHERE chat_id = $1', [chatId]);
             console.log('Результат проверки пользователя:', userResult.rows);
             
             if (userResult.rows.length === 0) {
@@ -22,8 +22,19 @@ class ShopHandler {
             }
 
             const userId = userResult.rows[0].id;
-            const userPoints = userResult.rows[0].points || 0;
-            console.log('ID пользователя:', userId);
+
+            // Получаем количество наград пользователя
+            const awardsResult = await pool.query(
+                'SELECT COUNT(*) as count FROM awards WHERE chat_id = $1',
+                [chatId]
+            );
+            const userPoints = parseInt(awardsResult.rows[0].count);
+
+            // Обновляем points в таблице users
+            await pool.query(
+                'UPDATE users SET points = $1 WHERE chat_id = $2',
+                [userPoints, chatId]
+            );
 
             // Получаем все доступные стикерпаки
             const stickerPacks = await pool.query(`

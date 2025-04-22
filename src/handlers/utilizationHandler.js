@@ -204,42 +204,62 @@ class UtilizationHandler {
             }
             const wasteTypeId = wasteTypeResult.rows[0].id;
 
-            // Записываем утилизацию в базу данных
-            const result = await pool.query(
-                `INSERT INTO utilizations 
-                (user_id, collection_point_id, waste_type_id, weight, date_utilized, time_utilized) 
-                VALUES ($1, $2, $3, $4, CURRENT_DATE, CURRENT_TIME)
-                RETURNING *`,
-                [userId, state.pointId, wasteTypeId, weight]
-            );
+            // Начинаем транзакцию
+            const client = await pool.connect();
+            try {
+                await client.query('BEGIN');
 
-            console.log('Utilization created:', result.rows[0]);
+                // Записываем утилизацию в базу данных
+                const result = await client.query(
+                    `INSERT INTO utilizations 
+                    (user_id, collection_point_id, waste_type_id, weight, date_utilized, time_utilized) 
+                    VALUES ($1, $2, $3, $4, CURRENT_DATE, CURRENT_TIME)
+                    RETURNING *`,
+                    [userId, state.pointId, wasteTypeId, weight]
+                );
 
-            // Создаем награду за утилизацию
-            const award = await Award.create(
-                chatId,
-                '🏆 Награда за утилизацию',
-                `Утилизация ${weight} кг ${state.type}`
-            );
+                console.log('Utilization created:', result.rows[0]);
 
-            // Получаем общее количество наград пользователя
-            const awardsCount = await pool.query(
-                'SELECT COUNT(*) as count FROM awards WHERE chat_id = $1',
-                [chatId]
-            );
+                // Обновляем количество points у пользователя
+                await client.query(
+                    'UPDATE users SET points = points + 1 WHERE chat_id = $1',
+                    [chatId]
+                );
 
-            // Отправляем сообщение об успехе
-            await bot.sendMessage(chatId, 
-                `✅ Отлично! Утилизация записана:\n` +
-                `Тип отходов: ${state.type}\n` +
-                `Вес: ${weight} кг\n\n` +
-                `За эту сдачу мусора вам начислено 1🏆, всего у вас ${awardsCount.rows[0].count}🏆 наград.\n` +
-                `Все награды вы можете посмотреть в профиле.\n\n` +
-                `Спасибо за вклад в защиту экологии! 🌍`
-            );
+                // Создаем награду за утилизацию
+                await client.query(
+                    'INSERT INTO awards (chat_id, name, description) VALUES ($1, $2, $3)',
+                    [chatId, '🏆 Награда за утилизацию', `Утилизация ${weight} кг ${state.type}`]
+                );
 
-            // Очищаем состояние
-            delete bot.utilizationState[chatId];
+                // Получаем общее количество наград пользователя
+                const awardsCount = await client.query(
+                    'SELECT COUNT(*) as count FROM awards WHERE chat_id = $1',
+                    [chatId]
+                );
+
+                await client.query('COMMIT');
+
+                // Отправляем сообщение об успехе
+                await bot.sendMessage(chatId, 
+                    `✅ Отлично! Утилизация записана:\n` +
+                    `Тип отходов: ${state.type}\n` +
+                    `Вес: ${weight} кг\n\n` +
+                    `За эту сдачу мусора вам начислено 1🏆, всего у вас ${awardsCount.rows[0].count}🏆 наград.\n` +
+                    `Все награды вы можете посмотреть в профиле.\n\n` +
+                    `Спасибо за вклад в защиту экологии! 🌍`
+                );
+
+                // Очищаем состояние
+                delete bot.utilizationState[chatId];
+
+            } catch (error) {
+                await client.query('ROLLBACK');
+                console.error('Error recording utilization:', error);
+                await bot.sendMessage(chatId, 'Произошла ошибка при записи утилизации. Пожалуйста, попробуйте позже.');
+            } finally {
+                client.release();
+            }
 
         } catch (error) {
             console.error('Error recording utilization:', error);

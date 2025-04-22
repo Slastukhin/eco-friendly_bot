@@ -1,6 +1,7 @@
 const User = require('../models/user');
 const Award = require('../models/award');
 const ExcelJS = require('exceljs');
+const { pool } = require('../database/db');
 
 class AwardsHandler {
     static async handleMyAwards(bot, chatId) {
@@ -99,7 +100,18 @@ class AwardsHandler {
             const user = await User.findByChatId(chatId);
             if (!user) return;
 
-            const totalPoints = user.points;
+            // Получаем текущее количество наград пользователя
+            const awardsResult = await pool.query(
+                'SELECT COUNT(*) as count FROM awards WHERE chat_id = $1',
+                [chatId]
+            );
+            const totalPoints = parseInt(awardsResult.rows[0].count);
+            
+            // Обновляем points в таблице users
+            await pool.query(
+                'UPDATE users SET points = $1 WHERE chat_id = $2',
+                [totalPoints, chatId]
+            );
             
             // Проверяем достижения на основе общего количества баллов
             const awards = [
